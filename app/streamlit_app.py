@@ -12,7 +12,7 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("Course Approval Form → Excel Extractor")
+st.title("Course Approval Form → Harrison is gay Extractor")
 
 st.markdown(
     """
