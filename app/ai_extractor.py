@@ -8,8 +8,8 @@ from openai import OpenAI
 
 from pdf_utils import pdf_to_page_images_b64
 
-# OpenAI client – will read OPENAI_API_KEY from environment / Streamlit secrets
-client = OpenAI()
+client = OpenAI()  # reads OPENAI_API_KEY from env/Streamlit secrets
+
 
 SYSTEM_PROMPT = """
 You are a careful assistant that reads COURSE APPROVAL FORMS (CAF) from images.
@@ -72,10 +72,11 @@ def _call_gpt4o_on_images(images_b64: List[str]) -> Dict[str, Any]:
         }
     ]
 
+    # IMPORTANT: type must be 'image_url', not 'input_image'
     for b64 in images_b64:
         content.append(
             {
-                "type": "input_image",
+                "type": "image_url",
                 "image_url": {"url": f"data:image/png;base64,{b64}"},
             }
         )
@@ -89,17 +90,22 @@ def _call_gpt4o_on_images(images_b64: List[str]) -> Dict[str, Any]:
         ],
     )
 
-    raw_content = resp.choices[0].message.content
+    msg = resp.choices[0].message
+    raw_content = msg.content
 
-    # `content` may be a string or list-of-parts; normalize to string
-    if isinstance(raw_content, list):
-        text = "".join(part.get("text", "") for part in raw_content if isinstance(part, dict))
+    # Normalize message content to a plain string
+    if isinstance(raw_content, str):
+        text = raw_content
+    elif isinstance(raw_content, list):
+        text = "".join(
+            part.get("text", "") for part in raw_content if isinstance(part, dict)
+        )
     else:
-        text = raw_content or ""
+        text = str(raw_content or "")
 
     text = text.strip()
 
-    # Strip ```json ... ``` fences if present
+    # Strip ```json ``` fences if the model wrapped it
     if text.startswith("```"):
         parts = text.split("```")
         if len(parts) >= 2:
