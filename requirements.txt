@@ -3,3 +3,5 @@ pandas
 pdfplumber
 openpyxl
 python-dateutil
+pymupdf           # fitz
+openai            # new Python SDK
