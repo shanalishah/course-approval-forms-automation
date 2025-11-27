@@ -24,17 +24,51 @@ download it as Excel.
 
 # Optional: load program directory
 program_dir_df = None
+# with st.sidebar:
+#     st.header("Configuration")
+
+#     prog_dir_file = st.file_uploader(
+#         "Program directory CSV (optional)",
+#         type=["csv"],
+#         key="prog_dir_uploader",
+#     )
+#     if prog_dir_file is not None:
+#         program_dir_df = pd.read_csv(prog_dir_file)
+#         st.success(f"Loaded program directory with {len(program_dir_df)} rows.")
+
 with st.sidebar:
     st.header("Configuration")
 
     prog_dir_file = st.file_uploader(
-        "Program directory CSV (optional)",
-        type=["csv"],
+        "Program list (Excel or CSV from your system)",
+        type=["csv", "xlsx"],
         key="prog_dir_uploader",
     )
+
+    program_dir_df = None
     if prog_dir_file is not None:
-        program_dir_df = pd.read_csv(prog_dir_file)
-        st.success(f"Loaded program directory with {len(program_dir_df)} rows.")
+        # Read either CSV or Excel
+        if prog_dir_file.name.lower().endswith(".xlsx"):
+            raw_prog = pd.read_excel(prog_dir_file)
+        else:
+            raw_prog = pd.read_csv(prog_dir_file)
+
+        # Standardize column names
+        raw_prog.columns = [c.strip() for c in raw_prog.columns]
+
+        if "Program Name" not in raw_prog.columns:
+            st.error("Program file must have a 'Program Name' column.")
+        else:
+            # Create the 'Program' column the parser expects
+            raw_prog["Program"] = (
+                raw_prog["Program Name"]
+                .astype(str)
+                .str.replace("Star icon", "", regex=False)
+                .str.strip()
+            )
+
+            program_dir_df = raw_prog
+            st.success(f"Loaded program directory with {len(program_dir_df)} rows.")
 
     st.markdown("---")
     st.caption(
