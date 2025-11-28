@@ -131,9 +131,17 @@ if st.button("Extract Courses"):
 
             st.subheader("Extracted Courses (editable)")
 
+            # edited_df = st.data_editor(
+            #     df_all,
+            #     use_container_width=True,
+            #     num_rows="dynamic",
+            #     height=550,
+            #     key="courses_editor",
+            # )
+
             edited_df = st.data_editor(
                 df_all,
-                use_container_width=True,
+                width="stretch",       # instead of use_container_width=True
                 num_rows="dynamic",
                 height=550,
                 key="courses_editor",
