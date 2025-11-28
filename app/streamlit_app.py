@@ -1,6 +1,4 @@
 # app/streamlit_app.py
-import io
-
 import pandas as pd
 import streamlit as st
 
@@ -8,155 +6,122 @@ from caf_parser import parse_caf_pdf_hybrid
 
 
 st.set_page_config(
-    page_title="Course Approval Form → Excel Extractor",
+    page_title="CAF → Excel Extractor",
     layout="wide",
 )
 
-st.title("Course Approval Form → Excel Extractor")
 
+st.title("📄 Course Approval Form → Excel Extractor")
 st.markdown(
-    """
-Upload one or more Course Approval Form (CAF) PDFs and this tool will extract
-course information into a structured table. It uses a **hybrid approach**:
-
-- 🧮 Rule-based parsing for typed/fillable PDFs (fast & free)
-- 🤖 GPT-4o vision fallback for scanned / messy forms
-
-You can review/edit the extracted table and download it as Excel.
-"""
+    "Upload Course Approval Forms (CAF) and automatically extract approved courses into a structured excel-ready table."
 )
 
-
-# ---------- Helpers ----------
-
-def load_program_directory(uploaded_file) -> pd.DataFrame | None:
-    """
-    Load your big program list (Program Name, City, Country, etc.)
-    from CSV or Excel and standardize into a DataFrame.
-    """
-    if uploaded_file is None:
-        return None
-
-    filename = uploaded_file.name.lower()
-    if filename.endswith(".xlsx") or filename.endswith(".xls"):
-        df = pd.read_excel(uploaded_file)
-    else:
-        df = pd.read_csv(uploaded_file)
-
-    df.columns = [c.strip() for c in df.columns]
-
-    # we keep original structure; parser will look for Program / Program Name later
-    if "Program Name" not in df.columns and "Program" not in df.columns:
-        st.warning("Program list does not have 'Program Name' or 'Program' column – enrichment will be skipped.")
-    return df
-
-
-def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Courses")
-    buf.seek(0)
-    return buf.getvalue()
-
-
-# ---------- Sidebar: Program directory ----------
+# ===============================
+# Sidebar: Program Directory Load
+# ===============================
 
 with st.sidebar:
     st.header("Configuration")
 
     prog_dir_file = st.file_uploader(
-        "Program list (Excel or CSV from your system)",
+        "Program list (Excel/CSV from your system)",
         type=["csv", "xlsx"],
         key="prog_dir_uploader",
     )
 
-    program_dir_df = load_program_directory(prog_dir_file)
-    if program_dir_df is not None:
+    program_dir_df = None
+    if prog_dir_file is not None:
+        if prog_dir_file.name.lower().endswith(".xlsx"):
+            raw_prog = pd.read_excel(prog_dir_file)
+        else:
+            raw_prog = pd.read_csv(prog_dir_file)
+
+        raw_prog.columns = [c.strip() for c in raw_prog.columns]
+
+        if "Program Name" in raw_prog.columns:
+            raw_prog["Program"] = (
+                raw_prog["Program Name"]
+                .astype(str)
+                .str.replace("Star icon", "", regex=False)
+                .str.strip()
+            )
+        elif "Program" not in raw_prog.columns:
+            st.error("Program file must have either 'Program Name' or 'Program'.")
+        else:
+            raw_prog["Program"] = raw_prog["Program"].astype(str).str.strip()
+
+        program_dir_df = raw_prog
         st.success(f"Loaded program directory with {len(program_dir_df)} rows.")
 
-    st.markdown("---")
-    st.caption(
-        "Note: Hybrid mode – rule-based first, then GPT-4o if needed. "
-        "Handwritten / scanned PDFs may consume OpenAI credits."
-    )
+# ===============================
+# CAF Files Upload
+# ===============================
 
-
-# ---------- Main: CAF PDFs upload ----------
-
+st.subheader("Upload CAF PDFs")
 uploaded_files = st.file_uploader(
-    "Upload CAF PDFs",
+    "Drag and drop one or more CAF PDFs",
     type=["pdf"],
     accept_multiple_files=True,
-    key="caf_uploader",
 )
 
-if uploaded_files:
-    st.info(f"{len(uploaded_files)} file(s) uploaded. Click **Extract Courses** to process.")
-else:
-    st.warning("Upload at least one CAF PDF to begin.")
+# ===============================
+# Extract Button & Processing
+# ===============================
 
-
-if st.button("Extract Courses"):
+if st.button("Extract Courses", disabled=not uploaded_files):
     if not uploaded_files:
-        st.error("Please upload at least one PDF.")
-    else:
-        all_dfs: list[pd.DataFrame] = []
+        st.warning("Please upload at least one CAF PDF file.")
+        st.stop()
 
-        for f in uploaded_files:
-            pdf_bytes = f.getvalue()
-            st.write(f"Processing **{f.name}** ...")
+    all_rows = []
 
-            try:
-                df_one = parse_caf_pdf_hybrid(pdf_bytes, program_directory=program_dir_df)
-            except Exception as e:
-                st.error(f"Error parsing {f.name}: {e}")
-                continue
+    for file in uploaded_files:
+        pdf_bytes = file.read()
 
-            if df_one is None or df_one.empty:
-                st.warning(f"No courses extracted from file: {f.name}")
-                continue
+        try:
+            df = parse_caf_pdf_hybrid(pdf_bytes, program_directory=program_dir_df)
+        except Exception as e:
+            st.error(f"Error parsing {file.name}: {e}")
+            continue
 
-            df_one["Source File"] = f.name
-            all_dfs.append(df_one)
+        if df.empty:
+            st.warning(f"No approved courses extracted from: {file.name}")
+            continue
 
-        if not all_dfs:
-            st.error("No courses extracted from any file.")
-        else:
-            df_all = pd.concat(all_dfs, ignore_index=True)
+        df["Source File"] = file.name
+        all_rows.append(df)
 
-            st.success(
-                f"Extracted **{len(df_all)} course rows** from "
-                f"**{len(uploaded_files)} file(s)**."
-            )
+    if not all_rows:
+        st.error("No approved courses extracted from any file.")
+        st.stop()
 
-            st.subheader("Extracted Courses (editable)")
+    result_df = pd.concat(all_rows, ignore_index=True)
 
-            # edited_df = st.data_editor(
-            #     df_all,
-            #     use_container_width=True,
-            #     num_rows="dynamic",
-            #     height=550,
-            #     key="courses_editor",
-            # )
+    # Editable table
+    st.subheader("Extracted Courses (editable)")
+    st.data_editor(
+        result_df,
+        width="stretch",
+        height=600,
+        key="courses_editor",
+    )
 
-            edited_df = st.data_editor(
-                df_all,
-                width="stretch",       # instead of use_container_width=True
-                num_rows="dynamic",
-                height=550,
-                key="courses_editor",
-            )
+    # Download
+    @st.cache_data
+    def to_excel_bytes(df):
+        import io
+        from pandas import ExcelWriter
 
-            st.caption(
-                "Column `_source` shows whether a row came from the rule-based parser (`rule`) "
-                "or GPT-4o (`ai`)."
-            )
+        output = io.BytesIO()
+        with ExcelWriter(output, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False)
+        return output.getvalue()
 
-            excel_bytes = df_to_excel_bytes(edited_df)
+    excel_data = to_excel_bytes(result_df)
 
-            st.download_button(
-                label="Download as Excel",
-                data=excel_bytes,
-                file_name="caf_courses_extracted.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+    st.download_button(
+        "⬇️ Download Excel",
+        data=excel_data,
+        file_name="CAF_Extracted_Courses.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
