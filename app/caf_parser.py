@@ -55,6 +55,31 @@ def _split_course_number_title(raw: str) -> tuple[str, str]:
 # Normalize AI output for title-only courses
 # ========================================
 
+# def _normalize_course_number_title_columns(df: pd.DataFrame) -> pd.DataFrame:
+#     if df.empty:
+#         return df
+
+#     def looks_like_code(s: str) -> bool:
+#         if not isinstance(s, str):
+#             return False
+#         s = s.strip()
+#         if not s:
+#             return False
+#         first = s.split()[0]
+#         return bool(COURSE_CODE_RE.match(first))
+
+#     for idx, row in df.iterrows():
+#         num = (row.get("Course Number") or "").strip()
+#         title = (row.get("Course Title") or "").strip()
+
+#         # AI sometimes puts full title in Course Number
+#         if num and not title:
+#             if not any(ch.isdigit() for ch in num) and len(num) > 10 and not looks_like_code(num):
+#                 df.at[idx, "Course Title"] = num
+#                 df.at[idx, "Course Number"] = ""
+
+#     return df
+
 def _normalize_course_number_title_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -72,14 +97,23 @@ def _normalize_course_number_title_columns(df: pd.DataFrame) -> pd.DataFrame:
         num = (row.get("Course Number") or "").strip()
         title = (row.get("Course Title") or "").strip()
 
-        # AI sometimes puts full title in Course Number
-        if num and not title:
-            if not any(ch.isdigit() for ch in num) and len(num) > 10 and not looks_like_code(num):
-                df.at[idx, "Course Title"] = num
-                df.at[idx, "Course Number"] = ""
+        if not num or title:
+            continue
+
+        lower = num.lower()
+        has_digit = any(ch.isdigit() for ch in num)
+
+        # CASE 1: pure title (no digits, already handled before)
+        is_pure_title = (not has_digit and len(num) > 10 and not looks_like_code(num))
+
+        # CASE 2: title that mentions credits, e.g. "IES Abroad ... (4 credits)"
+        mentions_credits = ("credit" in lower and not looks_like_code(num))
+
+        if is_pure_title or mentions_credits:
+            df.at[idx, "Course Title"] = num
+            df.at[idx, "Course Number"] = ""
 
     return df
-
 
 # ==============================
 # RULE-BASED PARSER (pdfplumber)
