@@ -24,6 +24,27 @@ Upload one or more Course Approval Forms (CAF) as PDFs and automatically extract
 """
 )
 
+
+# ===============================
+# Helper: robust CSV loader
+# ===============================
+
+def _read_csv_with_fallbacks(file_obj_or_path) -> pd.DataFrame:
+    """
+    Try reading CSV with UTF-8, then latin1, then cp1252 encodings.
+    Works for both file paths and file-like objects (Streamlit uploads).
+    """
+    last_err = None
+    for enc in ("utf-8", "latin1", "cp1252"):
+        try:
+            return pd.read_csv(file_obj_or_path, encoding=enc)
+        except Exception as e:
+            last_err = e
+            continue
+    # If all encodings fail, raise the last error
+    raise last_err
+
+
 # ===============================
 # Helper: load default programs.csv
 # ===============================
@@ -49,7 +70,7 @@ def load_default_program_directory() -> pd.DataFrame | None:
         if not programs_path.exists():
             return None
 
-        df = pd.read_csv(programs_path)
+        df = _read_csv_with_fallbacks(programs_path)
         return df
     except Exception:
         return None
@@ -71,7 +92,7 @@ with st.sidebar:
         )
     else:
         st.info(
-            "No default `data/programs.csv` found. "
+            "No default `data/programs.csv` found, or it could not be read. "
             "You can upload a program list file below."
         )
 
@@ -84,10 +105,12 @@ with st.sidebar:
 
     if prog_dir_file is not None:
         try:
+            # Excel: encoding is handled by openpyxl, so no need for our helper
             if prog_dir_file.name.lower().endswith(".xlsx"):
                 program_dir_df = pd.read_excel(prog_dir_file)
             else:
-                program_dir_df = pd.read_csv(prog_dir_file)
+                # CSV: use robust encoding fallbacks
+                program_dir_df = _read_csv_with_fallbacks(prog_dir_file)
 
             st.success(
                 f"Using uploaded program directory `{prog_dir_file.name}` "
