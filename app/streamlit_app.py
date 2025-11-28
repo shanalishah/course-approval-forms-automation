@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
+import io
 
 import pandas as pd
 import streamlit as st
@@ -24,8 +26,9 @@ st.markdown(
 # Paths / constants
 # ===============================
 
-APP_DIR = Path(__file__).parent
-DATA_DIR = APP_DIR.parent / "data"
+# Repo root = parent of the `app/` directory
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = REPO_ROOT / "data"
 DEFAULT_PROGRAMS_PATH = DATA_DIR / "programs.csv"
 
 
@@ -36,6 +39,7 @@ def load_default_program_directory() -> pd.DataFrame:
         try:
             df = pd.read_csv(DEFAULT_PROGRAMS_PATH)
             df.columns = [c.strip() for c in df.columns]
+
             # Normalize Program column
             if "Program Name" in df.columns and "Program" not in df.columns:
                 df["Program"] = (
@@ -46,6 +50,7 @@ def load_default_program_directory() -> pd.DataFrame:
                 )
             elif "Program" in df.columns:
                 df["Program"] = df["Program"].astype(str).str.strip()
+
             return df
         except Exception:
             return pd.DataFrame()
@@ -64,39 +69,56 @@ with st.sidebar:
         "- If you skip this, the app will try to use `data/programs.csv` from the repo."
     )
 
+    # Debug block so we can see what the app sees
+    with st.expander("🔍 Debug paths", expanded=False):
+        st.write("Current working dir:", os.getcwd())
+        try:
+            st.write("Repo root:", str(REPO_ROOT))
+            st.write("DATA_DIR:", str(DATA_DIR))
+            st.write("DEFAULT_PROGRAMS_PATH exists:", DEFAULT_PROGRAMS_PATH.exists())
+        except Exception as e:
+            st.write("Path debug error:", e)
+
     prog_dir_file = st.file_uploader(
         "Program list (Excel/CSV from your system)",
         type=["csv", "xlsx"],
         key="prog_dir_uploader",
     )
 
-    program_dir_df = None
+    program_dir_df: pd.DataFrame | None = None
 
     if prog_dir_file is not None:
         # Use uploaded file
-        if prog_dir_file.name.lower().endswith(".xlsx"):
-            raw_prog = pd.read_excel(prog_dir_file)
-        else:
-            raw_prog = pd.read_csv(prog_dir_file)
+        try:
+            if prog_dir_file.name.lower().endswith(".xlsx"):
+                raw_prog = pd.read_excel(prog_dir_file)
+            else:
+                raw_prog = pd.read_csv(prog_dir_file)
 
-        raw_prog.columns = [c.strip() for c in raw_prog.columns]
+            raw_prog.columns = [c.strip() for c in raw_prog.columns]
 
-        if "Program Name" in raw_prog.columns:
-            raw_prog["Program"] = (
-                raw_prog["Program Name"]
-                .astype(str)
-                .str.replace("Star icon", "", regex=False)
-                .str.strip()
-            )
-        elif "Program" in raw_prog.columns:
-            raw_prog["Program"] = raw_prog["Program"].astype(str).str.strip()
-        else:
-            st.error("Program file must have either 'Program Name' or 'Program'.")
-            raw_prog = pd.DataFrame()
+            if "Program Name" in raw_prog.columns:
+                raw_prog["Program"] = (
+                    raw_prog["Program Name"]
+                    .astype(str)
+                    .str.replace("Star icon", "", regex=False)
+                    .str.strip()
+                )
+            elif "Program" in raw_prog.columns:
+                raw_prog["Program"] = raw_prog["Program"].astype(str).str.strip()
+            else:
+                st.error("Program file must have either 'Program Name' or 'Program'.")
+                raw_prog = pd.DataFrame()
 
-        if not raw_prog.empty:
-            program_dir_df = raw_prog
-            st.success(f"Loaded program directory from upload with {len(program_dir_df)} rows.")
+            if not raw_prog.empty:
+                program_dir_df = raw_prog
+                st.success(
+                    f"Loaded program directory from upload with {len(program_dir_df)} rows."
+                )
+        except Exception as e:
+            st.error(f"Error reading uploaded program file: {e}")
+            program_dir_df = None
+
     else:
         # Fall back to built-in data/programs.csv
         default_prog = load_default_program_directory()
@@ -132,7 +154,7 @@ if st.button("Extract Courses", disabled=not uploaded_files):
         st.warning("Please upload at least one CAF PDF file.")
         st.stop()
 
-    all_rows = []
+    all_rows: list[pd.DataFrame] = []
 
     for file in uploaded_files:
         pdf_bytes = file.read()
@@ -163,7 +185,7 @@ if st.button("Extract Courses", disabled=not uploaded_files):
     st.subheader("Extracted Courses (editable)")
     st.data_editor(
         result_df,
-        width="stretch",
+        width="stretch",  # Streamlit will warn eventually; can change to width="content"/"stretch"
         height=600,
         key="courses_editor",
     )
@@ -171,7 +193,6 @@ if st.button("Extract Courses", disabled=not uploaded_files):
     # Download
     @st.cache_data
     def to_excel_bytes(df: pd.DataFrame) -> bytes:
-        import io
         from pandas import ExcelWriter
 
         output = io.BytesIO()
