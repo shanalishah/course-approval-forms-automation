@@ -97,20 +97,39 @@ def _normalize_course_number_title_columns(df: pd.DataFrame) -> pd.DataFrame:
         num = (row.get("Course Number") or "").strip()
         title = (row.get("Course Title") or "").strip()
 
-        if not num or title:
+        # nothing to fix
+        if not num:
             continue
 
-        lower = num.lower()
-        has_digit = any(ch.isdigit() for ch in num)
+        lower_num = num.lower()
+        lower_title = title.lower()
 
-        # CASE 1: pure title (no digits, already handled before)
-        is_pure_title = (not has_digit and len(num) > 10 and not looks_like_code(num))
+        has_digit_num = any(ch.isdigit() for ch in num)
 
-        # CASE 2: title that mentions credits, e.g. "IES Abroad ... (4 credits)"
-        mentions_credits = ("credit" in lower and not looks_like_code(num))
+        # CASE 1: number field actually looks like a long title (no digits, not a code)
+        is_pure_title_num = (
+            not has_digit_num
+            and len(num) > 10
+            and not looks_like_code(num)
+        )
 
-        if is_pure_title or mentions_credits:
-            df.at[idx, "Course Title"] = num
+        # CASE 2: number field itself mentions credits (weird but possible)
+        num_mentions_credits = ("credit" in lower_num and not looks_like_code(num))
+
+        # CASE 3: title is basically just "(4 credits)" etc.
+        title_is_just_credits = (
+            bool(title)
+            and "credit" in lower_title
+            and len(title) <= 20
+        )
+
+        if is_pure_title_num or num_mentions_credits or title_is_just_credits:
+            # merge the two pieces if title exists and is just credits
+            new_title = num
+            if title and title_is_just_credits:
+                new_title = f"{num} {title}".strip()
+
+            df.at[idx, "Course Title"] = new_title
             df.at[idx, "Course Number"] = ""
 
     return df
