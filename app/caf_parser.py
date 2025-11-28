@@ -1,9 +1,13 @@
+Here’s your updated app/caf_parser.py with fuzzy program matching wired in. You can copy-paste the whole file.
+
 # app/caf_parser.py
 from __future__ import annotations
 
 import io
 import re
+import difflib
 from typing import Optional, List
+
 import pandas as pd
 import pdfplumber
 
@@ -15,6 +19,7 @@ from ai_extractor import ai_extract_courses_from_pdf_bytes
 # ==============================
 
 COURSE_CODE_RE = re.compile(r"^[A-Za-z]{2,}\s*\d{2,}[A-Za-z0-9\-]*$")
+
 
 def _split_course_number_title(raw: str) -> tuple[str, str]:
     if not raw:
@@ -54,31 +59,6 @@ def _split_course_number_title(raw: str) -> tuple[str, str]:
 # ========================================
 # Normalize AI output for title-only courses
 # ========================================
-
-# def _normalize_course_number_title_columns(df: pd.DataFrame) -> pd.DataFrame:
-#     if df.empty:
-#         return df
-
-#     def looks_like_code(s: str) -> bool:
-#         if not isinstance(s, str):
-#             return False
-#         s = s.strip()
-#         if not s:
-#             return False
-#         first = s.split()[0]
-#         return bool(COURSE_CODE_RE.match(first))
-
-#     for idx, row in df.iterrows():
-#         num = (row.get("Course Number") or "").strip()
-#         title = (row.get("Course Title") or "").strip()
-
-#         # AI sometimes puts full title in Course Number
-#         if num and not title:
-#             if not any(ch.isdigit() for ch in num) and len(num) > 10 and not looks_like_code(num):
-#                 df.at[idx, "Course Title"] = num
-#                 df.at[idx, "Course Number"] = ""
-
-#     return df
 
 def _normalize_course_number_title_columns(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -133,6 +113,7 @@ def _normalize_course_number_title_columns(df: pd.DataFrame) -> pd.DataFrame:
             df.at[idx, "Course Number"] = ""
 
     return df
+
 
 # ==============================
 # RULE-BASED PARSER (pdfplumber)
@@ -220,6 +201,95 @@ def _parse_caf_pdf_rule(pdf_bytes: bytes) -> List[dict]:
 
 
 # ==============================
+# PROGRAM DIRECTORY ENRICHMENT
+# ==============================
+
+def _enrich_with_program_directory(df: pd.DataFrame,
+                                   program_directory: pd.DataFrame) -> pd.DataFrame:
+    """
+    Enrich df with City/Country from program_directory.
+
+    Strategy:
+      1) Exact match on Program
+      2) For rows still missing City/Country, use fuzzy matching
+         (closest Program name in the directory).
+    """
+    if df.empty or program_directory is None or program_directory.empty:
+        return df
+
+    prog = program_directory.copy()
+
+    # Normalize program name column in directory
+    if "Program" not in prog.columns:
+        if "Program Name" in prog.columns:
+            prog["Program"] = (
+                prog["Program Name"]
+                .astype(str)
+                .str.replace("Star icon", "", regex=False)
+                .str.strip()
+            )
+        else:
+            # Nothing we can do
+            return df
+
+    # Keep only the columns we need
+    prog_small = prog[["Program", "City", "Country"]].copy()
+
+    # 1) Exact merge on Program
+    merged = df.merge(
+        prog_small,
+        on="Program",
+        how="left",
+        suffixes=("", "_dir"),
+    )
+
+    # Use directory values where present
+    if "City_dir" in merged.columns:
+        merged["City"] = merged["City"].fillna(merged["City_dir"])
+        merged.drop(columns=["City_dir"], inplace=True)
+    if "Country_dir" in merged.columns:
+        merged["Country"] = merged["Country"].fillna(merged["Country_dir"])
+        merged.drop(columns=["Country_dir"], inplace=True)
+
+    # 2) Fuzzy match for rows still missing City/Country
+    mask_needs_match = merged["Program"].notna() & merged["City"].isna() & merged["Country"].isna()
+    if mask_needs_match.any():
+        dir_programs = prog_small["Program"].dropna().unique().tolist()
+
+        def best_match(name: str) -> Optional[str]:
+            name = str(name).strip()
+            if not name:
+                return None
+            matches = difflib.get_close_matches(name, dir_programs, n=1, cutoff=0.6)
+            return matches[0] if matches else None
+
+        merged.loc[mask_needs_match, "_prog_match"] = (
+            merged.loc[mask_needs_match, "Program"].apply(best_match)
+        )
+
+        # merge City/Country from directory based on the matched name
+        match_df = prog_small.rename(columns={"Program": "_prog_match"})
+        merged = merged.merge(
+            match_df,
+            on="_prog_match",
+            how="left",
+            suffixes=("", "_match"),
+        )
+
+        if "City_match" in merged.columns:
+            merged["City"] = merged["City"].fillna(merged["City_match"])
+            merged.drop(columns=["City_match"], inplace=True)
+
+        if "Country_match" in merged.columns:
+            merged["Country"] = merged["Country"].fillna(merged["Country_match"])
+            merged.drop(columns=["Country_match"], inplace=True)
+
+        merged.drop(columns=["_prog_match"], inplace=True, errors="ignore")
+
+    return merged
+
+
+# ==============================
 # HYBRID PARSER (rule → AI)
 # ==============================
 
@@ -232,27 +302,9 @@ def parse_caf_pdf_hybrid(pdf_bytes: bytes, program_directory: Optional[pd.DataFr
 
     df = pd.DataFrame(rows)
 
-    # Merge with Program Directory if provided
+    # Merge with Program Directory if provided (exact + fuzzy)
     if program_directory is not None and "Program" in df.columns:
-        prog = program_directory.copy()
-        if "Program" not in prog.columns and "Program Name" in prog.columns:
-            prog["Program"] = (
-                prog["Program Name"]
-                .astype(str)
-                .str.replace("Star icon", "", regex=False)
-                .str.strip()
-            )
-
-        df = df.merge(
-            prog[["Program", "City", "Country"]],
-            on="Program",
-            how="left",
-            suffixes=("", "_dir"),
-        )
-
-        df["City"] = df["City"].fillna(df["City_dir"])
-        df["Country"] = df["Country"].fillna(df["Country_dir"])
-        df = df.drop(columns=[c for c in df.columns if c.endswith("_dir")])
+        df = _enrich_with_program_directory(df, program_directory)
 
     # === Normalize AI misplacements ===
     df = _normalize_course_number_title_columns(df)
@@ -268,7 +320,7 @@ def parse_caf_pdf_hybrid(pdf_bytes: bytes, program_directory: Optional[pd.DataFr
         "Discipline", "Type of Credit",
         "US Credits", "Foreign Credits",
         "Link Course Search", "Link to Syllabus",
-        "Students", "Comments", "_source"
+        "Students", "Comments", "_source",
     ]
 
     for col in desired_order:
